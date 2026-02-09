@@ -75,6 +75,53 @@ Le script utilise les paramètres suivants (modifiables dans le code) :
 - Microsoft Excel (pour l'import de fichiers Excel)
 - Droits de lecture sur l'OU Active Directory configurée
 
+## Scripts Disponibles
+
+### 1. Extensions GUI v2.ps1
+Interface graphique pour comparer les extensions entre AD et fichier Excel.
+
+**Utilisation:**
+```powershell
+.\Extensions GUI v2.ps1
+```
+
+### 2. Generate-SuccursaleReport.ps1 ⭐ NOUVEAU
+Génère un rapport HTML professionnel classant les employés par succursale.
+
+**Fonctionnalités:**
+- 📊 Classification intelligente par succursale (14 succursales + 7 Espaces Plombérium)
+- 🎯 Matching tolérant basé sur les adresses AD
+- 🎨 Rapport HTML avec design professionnel (gradients, badges, tables interactives)
+- 📋 Table des matières cliquable
+- 📈 Statistiques détaillées
+- 🏢 Distinction visuelle Succursales vs Espaces Plombérium
+- ❓ Section pour employés non classés
+
+**Utilisation:**
+```powershell
+.\Generate-SuccursaleReport.ps1
+```
+
+Le script génère un fichier `Rapport_Succursales_YYYYMMDD_HHmmss.html` avec:
+- En-tête avec gradient bleu/violet
+- Cartes statistiques (Total employés, Succursales, Espaces, Non classés)
+- Sections par succursale avec headers colorés
+- Tableaux d'employés triés par nom
+- Design responsive et imprimable
+
+**Algorithme de Classification:**
+1. Extrait les mots-clés des adresses (numéros de rue, noms, villes)
+2. Compare avec les adresses de référence des succursales
+3. Score basé sur les correspondances (fuzzy matching)
+4. Attribution à la succursale avec le meilleur score (seuil: 10+)
+
+## Fichiers Requis
+
+- `Succursales addresses.xlsx` : Correspondance adresses ↔ succursales (21 lignes)
+  - Colonnes: Nom succursale, Adresse, Numéro succursale
+  - 14 succursales (#1-9, #20, #40, #42-44)
+  - 7 Espaces Plombérium (#21, #23-27, #50)
+
 ## Améliorations Version 2
 
 ### Nouvelles fonctionnalités (février 2026)
@@ -86,3 +133,5 @@ Le script utilise les paramètres suivants (modifiables dans le code) :
 ✅ Cache intelligent des données AD
 ✅ Refactorisation du code (évite la duplication)
 ✅ Normalisation des extensions pour comparaison précise
+✅ **Générateur de rapport par succursale** (HTML professionnel)
+✅ **Matching intelligent d'adresses** (classification automatique)
