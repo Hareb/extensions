@@ -31,6 +31,10 @@ $locationMapping = @{
 # Variables globales
 $script:adData = $null
 $script:fileData = $null
+$script:adDataCache = $null
+$script:adDataCacheTime = $null
+$script:cacheValidityMinutes = 5
+$script:lastComparison = $null
 
 # Couleurs
 $colorPrimary = [System.Drawing.Color]::FromArgb(0, 120, 215)
@@ -42,6 +46,47 @@ $colorDanger = [System.Drawing.Color]::FromArgb(232, 17, 35)
 # ============================================
 # FONCTIONS
 # ============================================
+
+function Normalize-PhoneExtension {
+    param([string]$Extension)
+
+    if ([string]::IsNullOrWhiteSpace($Extension)) {
+        return ""
+    }
+
+    # Normaliser: enlever espaces, tirets, parenthèses
+    return $Extension -replace '[\s\-\(\)]', ''
+}
+
+function New-CustomDataGrid {
+    param(
+        [int]$X,
+        [int]$Y,
+        [int]$Width,
+        [int]$Height,
+        [string[]]$Columns,
+        [System.Drawing.Color]$BackgroundColor = [System.Drawing.Color]::White
+    )
+
+    $dataGrid = New-Object System.Windows.Forms.DataGridView
+    $dataGrid.Location = New-Object System.Drawing.Point($X, $Y)
+    $dataGrid.Size = New-Object System.Drawing.Size($Width, $Height)
+    $dataGrid.AllowUserToAddRows = $false
+    $dataGrid.AllowUserToDeleteRows = $false
+    $dataGrid.ReadOnly = $true
+    $dataGrid.SelectionMode = 'FullRowSelect'
+    $dataGrid.AutoSizeColumnsMode = 'Fill'
+    $dataGrid.BackgroundColor = $BackgroundColor
+
+    foreach ($colName in $Columns) {
+        $col = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+        $col.HeaderText = $colName
+        $col.Name = $colName
+        [void]$dataGrid.Columns.Add($col)
+    }
+
+    return $dataGrid
+}
 
 function Get-AllPhoneDirectory {
     param(
@@ -195,25 +240,197 @@ function Load-ExcelFile {
     }
 }
 
+function Export-ComparisonResults {
+    param(
+        $Nouveaux,
+        $Partis,
+        $Modifications,
+        [string]$OutputPath
+    )
+
+    try {
+        # Créer un objet pour l'export
+        $exportData = @()
+
+        # Ajouter les nouveaux
+        foreach ($user in $Nouveaux) {
+            $exportData += [PSCustomObject]@{
+                Type = "NOUVEAU"
+                Succursale = $user.Succursale
+                Nom = $user.Nom
+                Prenom = $user.Prenom
+                Extension = $user.Extension
+                Adresse = $user.Adresse
+                Ville = $user.Ville
+                CodePostal = $user.CodePostal
+                Email = $user.Email
+                SamAccountName = $user.SamAccountName
+                Changements = ""
+            }
+        }
+
+        # Ajouter les partis
+        foreach ($user in $Partis) {
+            $exportData += [PSCustomObject]@{
+                Type = "PARTI"
+                Succursale = $user.Succursale
+                Nom = $user.Nom
+                Prenom = $user.Prenom
+                Extension = $user.Extension
+                Adresse = $user.Adresse
+                Ville = $user.Ville
+                CodePostal = $user.CodePostal
+                Email = $user.Email
+                SamAccountName = $user.SamAccountName
+                Changements = ""
+            }
+        }
+
+        # Ajouter les modifications
+        foreach ($modif in $Modifications) {
+            $exportData += [PSCustomObject]@{
+                Type = "MODIFICATION"
+                Succursale = $modif.NouvelleSuccursale
+                Nom = $modif.Nom
+                Prenom = $modif.Prenom
+                Extension = $modif.NouvelleExtension
+                Adresse = $modif.NouvelleAdresse
+                Ville = $modif.NouvelleVille
+                CodePostal = ""
+                Email = $modif.NouvelEmail
+                SamAccountName = $modif.SamAccountName
+                Changements = $modif.Changements
+            }
+        }
+
+        # Exporter en CSV avec UTF8 BOM pour Excel
+        $exportData | Export-Csv -Path $OutputPath -NoTypeInformation -Encoding UTF8
+
+        [System.Windows.Forms.MessageBox]::Show(
+            "Export réussi: $OutputPath`n`nTotal: $($exportData.Count) entrées",
+            "Export terminé",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        )
+        return $true
+    }
+    catch {
+        [System.Windows.Forms.MessageBox]::Show(
+            "Erreur lors de l'export: $($_.Exception.Message)",
+            "Erreur",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        )
+        return $false
+    }
+}
+
 function Compare-Data {
     param(
         $ADData,
         $FileData
     )
-    
+
     if (-not $ADData -or -not $FileData) {
         return $null
     }
-    
-    $adSams = $ADData.SamAccountName
-    $fileSams = $FileData.SamAccountName
-    
-    $nouveaux = $ADData | Where-Object { $fileSams -notcontains $_.SamAccountName }
-    $partis = $FileData | Where-Object { $adSams -notcontains $_.SamAccountName }
-    
+
+    # Créer des hashtables pour accès rapide (insensible à la casse)
+    $adHash = @{}
+    foreach ($user in $ADData) {
+        $adHash[$user.SamAccountName.ToLower()] = $user
+    }
+
+    $fileHash = @{}
+    foreach ($user in $FileData) {
+        $fileHash[$user.SamAccountName.ToLower()] = $user
+    }
+
+    $nouveaux = @()
+    $partis = @()
+    $modifications = @()
+
+    # Trouver les nouveaux (dans AD mais pas dans fichier)
+    foreach ($adUser in $ADData) {
+        $samLower = $adUser.SamAccountName.ToLower()
+        if (-not $fileHash.ContainsKey($samLower)) {
+            $nouveaux += $adUser
+        }
+    }
+
+    # Trouver les partis (dans fichier mais pas dans AD)
+    foreach ($fileUser in $FileData) {
+        $samLower = $fileUser.SamAccountName.ToLower()
+        if (-not $adHash.ContainsKey($samLower)) {
+            $partis += $fileUser
+        }
+    }
+
+    # Trouver les modifications (présent dans les deux mais avec des différences)
+    foreach ($adUser in $ADData) {
+        $samLower = $adUser.SamAccountName.ToLower()
+        if ($fileHash.ContainsKey($samLower)) {
+            $fileUser = $fileHash[$samLower]
+            $changes = @()
+
+            # Comparer Extension (normalisée)
+            $adExtNorm = Normalize-PhoneExtension $adUser.Extension
+            $fileExtNorm = Normalize-PhoneExtension $fileUser.Extension
+            if ($adExtNorm -ne $fileExtNorm) {
+                $changes += "Extension: '$($fileUser.Extension)' → '$($adUser.Extension)'"
+            }
+
+            # Comparer Adresse
+            if ($adUser.Adresse -ne $fileUser.Adresse) {
+                $changes += "Adresse: '$($fileUser.Adresse)' → '$($adUser.Adresse)'"
+            }
+
+            # Comparer Ville
+            if ($adUser.Ville -ne $fileUser.Ville) {
+                $changes += "Ville: '$($fileUser.Ville)' → '$($adUser.Ville)'"
+            }
+
+            # Comparer Succursale
+            if ($adUser.Succursale -ne $fileUser.Succursale) {
+                $changes += "Succursale: '$($fileUser.Succursale)' → '$($adUser.Succursale)'"
+            }
+
+            # Comparer Code Postal
+            if ($adUser.CodePostal -ne $fileUser.CodePostal) {
+                $changes += "Code Postal: '$($fileUser.CodePostal)' → '$($adUser.CodePostal)'"
+            }
+
+            # Comparer Email
+            if ($adUser.Email -ne $fileUser.Email) {
+                $changes += "Email: '$($fileUser.Email)' → '$($adUser.Email)'"
+            }
+
+            # Si des changements existent, ajouter à la liste
+            if ($changes.Count -gt 0) {
+                $modifications += [PSCustomObject]@{
+                    SamAccountName = $adUser.SamAccountName
+                    Nom = $adUser.Nom
+                    Prenom = $adUser.Prenom
+                    Changements = $changes -join " | "
+                    AncienneExtension = $fileUser.Extension
+                    NouvelleExtension = $adUser.Extension
+                    AncienneAdresse = $fileUser.Adresse
+                    NouvelleAdresse = $adUser.Adresse
+                    AncienneVille = $fileUser.Ville
+                    NouvelleVille = $adUser.Ville
+                    AncienneSuccursale = $fileUser.Succursale
+                    NouvelleSuccursale = $adUser.Succursale
+                    AncienEmail = $fileUser.Email
+                    NouvelEmail = $adUser.Email
+                }
+            }
+        }
+    }
+
     return @{
         Nouveaux = $nouveaux
         Partis = $partis
+        Modifications = $modifications
     }
 }
 
@@ -223,10 +440,18 @@ function Compare-Data {
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'Comparateur de Repertoire Telephonique'
-$form.Size = New-Object System.Drawing.Size(1400, 800)
+$form.Size = New-Object System.Drawing.Size(1400, 850)
 $form.StartPosition = 'CenterScreen'
 $form.BackColor = $colorSecondary
 $form.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+
+# Barre de progression globale
+$progressBar = New-Object System.Windows.Forms.ProgressBar
+$progressBar.Location = New-Object System.Drawing.Point(10, 805)
+$progressBar.Size = New-Object System.Drawing.Size(1360, 25)
+$progressBar.Style = 'Continuous'
+$progressBar.Visible = $false
+$form.Controls.Add($progressBar)
 
 # Titre
 $lblTitle = New-Object System.Windows.Forms.Label
@@ -264,9 +489,34 @@ $btnLoadAD.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing
 $btnLoadAD.Add_Click({
     $btnLoadAD.Enabled = $false
     $btnLoadAD.Text = "Chargement en cours..."
-    
-    $script:adData = Get-AllPhoneDirectory -OUSearchBase $OUPath -LocationMap $locationMapping
-    
+    $progressBar.Visible = $true
+    $progressBar.Value = 0
+
+    # Vérifier si le cache est valide
+    $useCache = $false
+    if ($script:adDataCache -and $script:adDataCacheTime) {
+        $cacheAge = (Get-Date) - $script:adDataCacheTime
+        if ($cacheAge.TotalMinutes -lt $script:cacheValidityMinutes) {
+            $useCache = $true
+            $script:adData = $script:adDataCache
+            $progressBar.Value = 100
+        }
+    }
+
+    # Charger depuis AD si pas de cache valide
+    if (-not $useCache) {
+        $progressBar.Value = 10
+        $script:adData = Get-AllPhoneDirectory -OUSearchBase $OUPath -LocationMap $locationMapping
+        $progressBar.Value = 80
+
+        # Mettre à jour le cache
+        if ($script:adData) {
+            $script:adDataCache = $script:adData
+            $script:adDataCacheTime = Get-Date
+        }
+        $progressBar.Value = 100
+    }
+
     if ($script:adData) {
         $dataGridAD.Rows.Clear()
         foreach ($user in $script:adData) {
@@ -275,15 +525,17 @@ $btnLoadAD.Add_Click({
                 $user.Ville, $user.Email, $user.SamAccountName
             )
         }
-        $lblADCount.Text = "Total: $($script:adData.Count) utilisateurs"
+        $cacheStatus = if ($useCache) { " (depuis cache)" } else { "" }
+        $lblADCount.Text = "Total: $($script:adData.Count) utilisateurs$cacheStatus"
         $lblADCount.ForeColor = $colorSuccess
-        
+
         # Si les deux sont chargés, comparer automatiquement
         if ($script:fileData) {
             Compare-AndDisplay
         }
     }
-    
+
+    $progressBar.Visible = $false
     $btnLoadAD.Enabled = $true
     $btnLoadAD.Text = "CHARGER DEPUIS AD"
 })
@@ -295,27 +547,43 @@ $lblADCount.Text = 'Aucune donnee chargee'
 $lblADCount.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
 $lblADCount.TextAlign = 'MiddleCenter'
 
-$dataGridAD = New-Object System.Windows.Forms.DataGridView
-$dataGridAD.Location = New-Object System.Drawing.Point(10, 130)
-$dataGridAD.Size = New-Object System.Drawing.Size(650, 310)
-$dataGridAD.AllowUserToAddRows = $false
-$dataGridAD.AllowUserToDeleteRows = $false
-$dataGridAD.ReadOnly = $true
-$dataGridAD.SelectionMode = 'FullRowSelect'
-$dataGridAD.AutoSizeColumnsMode = 'Fill'
-$dataGridAD.BackgroundColor = [System.Drawing.Color]::White
+# Filtres de recherche AD
+$lblFilterAD = New-Object System.Windows.Forms.Label
+$lblFilterAD.Location = New-Object System.Drawing.Point(10, 125)
+$lblFilterAD.Size = New-Object System.Drawing.Size(80, 20)
+$lblFilterAD.Text = 'Filtrer:'
+$lblFilterAD.Font = New-Object System.Drawing.Font('Segoe UI', 8)
+
+$txtFilterAD = New-Object System.Windows.Forms.TextBox
+$txtFilterAD.Location = New-Object System.Drawing.Point(70, 123)
+$txtFilterAD.Size = New-Object System.Drawing.Size(590, 20)
+$txtFilterAD.Font = New-Object System.Drawing.Font('Segoe UI', 8)
+$txtFilterAD.Add_TextChanged({
+    if ($script:adData) {
+        $filterText = $txtFilterAD.Text.ToLower()
+        $dataGridAD.Rows.Clear()
+        foreach ($user in $script:adData) {
+            $matchName = $user.Nom.ToLower().Contains($filterText) -or $user.Prenom.ToLower().Contains($filterText)
+            $matchSucc = $user.Succursale.ToLower().Contains($filterText)
+            $matchExt = $user.Extension.Contains($filterText)
+            if ($matchName -or $matchSucc -or $matchExt -or $filterText -eq "") {
+                [void]$dataGridAD.Rows.Add(
+                    $user.Succursale, $user.Nom, $user.Prenom, $user.Extension,
+                    $user.Ville, $user.Email, $user.SamAccountName
+                )
+            }
+        }
+    }
+})
 
 $cols = @("Succursale", "Nom", "Prenom", "Extension", "Ville", "Email", "SamAccountName")
-foreach ($colName in $cols) {
-    $col = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-    $col.HeaderText = $colName
-    $col.Name = $colName
-    [void]$dataGridAD.Columns.Add($col)
-}
+$dataGridAD = New-CustomDataGrid -X 10 -Y 150 -Width 650 -Height 290 -Columns $cols
 
 $panelAD.Controls.Add($lblADTitle)
 $panelAD.Controls.Add($btnLoadAD)
 $panelAD.Controls.Add($lblADCount)
+$panelAD.Controls.Add($lblFilterAD)
+$panelAD.Controls.Add($txtFilterAD)
 $panelAD.Controls.Add($dataGridAD)
 $form.Controls.Add($panelAD)
 
@@ -346,13 +614,16 @@ $btnLoadFile.Add_Click({
     $openDialog = New-Object System.Windows.Forms.OpenFileDialog
     $openDialog.Filter = 'Fichiers Excel (*.xlsx;*.xls)|*.xlsx;*.xls'
     $openDialog.Title = "Selectionnez le fichier Excel"
-    
+
     if ($openDialog.ShowDialog() -eq 'OK') {
         $btnLoadFile.Enabled = $false
         $btnLoadFile.Text = "Chargement en cours..."
-        
+        $progressBar.Visible = $true
+        $progressBar.Value = 10
+
         $script:fileData = Load-ExcelFile -FilePath $openDialog.FileName
-        
+        $progressBar.Value = 80
+
         if ($script:fileData) {
             $dataGridFile.Rows.Clear()
             foreach ($user in $script:fileData) {
@@ -363,13 +634,15 @@ $btnLoadFile.Add_Click({
             }
             $lblFileCount.Text = "Total: $($script:fileData.Count) utilisateurs"
             $lblFileCount.ForeColor = $colorSuccess
-            
+
             # Si les deux sont chargés, comparer automatiquement
             if ($script:adData) {
                 Compare-AndDisplay
             }
         }
-        
+
+        $progressBar.Value = 100
+        $progressBar.Visible = $false
         $btnLoadFile.Enabled = $true
         $btnLoadFile.Text = "CHARGER FICHIER EXCEL"
     }
@@ -382,26 +655,42 @@ $lblFileCount.Text = 'Aucune donnee chargee'
 $lblFileCount.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
 $lblFileCount.TextAlign = 'MiddleCenter'
 
-$dataGridFile = New-Object System.Windows.Forms.DataGridView
-$dataGridFile.Location = New-Object System.Drawing.Point(10, 130)
-$dataGridFile.Size = New-Object System.Drawing.Size(650, 310)
-$dataGridFile.AllowUserToAddRows = $false
-$dataGridFile.AllowUserToDeleteRows = $false
-$dataGridFile.ReadOnly = $true
-$dataGridFile.SelectionMode = 'FullRowSelect'
-$dataGridFile.AutoSizeColumnsMode = 'Fill'
-$dataGridFile.BackgroundColor = [System.Drawing.Color]::White
+# Filtres de recherche File
+$lblFilterFile = New-Object System.Windows.Forms.Label
+$lblFilterFile.Location = New-Object System.Drawing.Point(10, 125)
+$lblFilterFile.Size = New-Object System.Drawing.Size(80, 20)
+$lblFilterFile.Text = 'Filtrer:'
+$lblFilterFile.Font = New-Object System.Drawing.Font('Segoe UI', 8)
 
-foreach ($colName in $cols) {
-    $col = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-    $col.HeaderText = $colName
-    $col.Name = $colName
-    [void]$dataGridFile.Columns.Add($col)
-}
+$txtFilterFile = New-Object System.Windows.Forms.TextBox
+$txtFilterFile.Location = New-Object System.Drawing.Point(70, 123)
+$txtFilterFile.Size = New-Object System.Drawing.Size(590, 20)
+$txtFilterFile.Font = New-Object System.Drawing.Font('Segoe UI', 8)
+$txtFilterFile.Add_TextChanged({
+    if ($script:fileData) {
+        $filterText = $txtFilterFile.Text.ToLower()
+        $dataGridFile.Rows.Clear()
+        foreach ($user in $script:fileData) {
+            $matchName = $user.Nom.ToLower().Contains($filterText) -or $user.Prenom.ToLower().Contains($filterText)
+            $matchSucc = $user.Succursale.ToLower().Contains($filterText)
+            $matchExt = $user.Extension.Contains($filterText)
+            if ($matchName -or $matchSucc -or $matchExt -or $filterText -eq "") {
+                [void]$dataGridFile.Rows.Add(
+                    $user.Succursale, $user.Nom, $user.Prenom, $user.Extension,
+                    $user.Ville, $user.Email, $user.SamAccountName
+                )
+            }
+        }
+    }
+})
+
+$dataGridFile = New-CustomDataGrid -X 10 -Y 150 -Width 650 -Height 290 -Columns $cols
 
 $panelFile.Controls.Add($lblFileTitle)
 $panelFile.Controls.Add($btnLoadFile)
 $panelFile.Controls.Add($lblFileCount)
+$panelFile.Controls.Add($lblFilterFile)
+$panelFile.Controls.Add($txtFilterFile)
 $panelFile.Controls.Add($dataGridFile)
 $form.Controls.Add($panelFile)
 
@@ -436,22 +725,8 @@ $tabNouveaux = New-Object System.Windows.Forms.TabPage
 $tabNouveaux.Text = 'NOUVEAUX EMPLOYES'
 $tabNouveaux.BackColor = [System.Drawing.Color]::White
 
-$dataGridNouveaux = New-Object System.Windows.Forms.DataGridView
-$dataGridNouveaux.Location = New-Object System.Drawing.Point(5, 5)
-$dataGridNouveaux.Size = New-Object System.Drawing.Size(1315, 100)
-$dataGridNouveaux.AllowUserToAddRows = $false
-$dataGridNouveaux.AllowUserToDeleteRows = $false
-$dataGridNouveaux.ReadOnly = $true
-$dataGridNouveaux.SelectionMode = 'FullRowSelect'
-$dataGridNouveaux.AutoSizeColumnsMode = 'Fill'
-$dataGridNouveaux.BackgroundColor = [System.Drawing.Color]::FromArgb(220, 255, 220)
-
-foreach ($colName in $cols) {
-    $col = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-    $col.HeaderText = $colName
-    $col.Name = $colName
-    [void]$dataGridNouveaux.Columns.Add($col)
-}
+$dataGridNouveaux = New-CustomDataGrid -X 5 -Y 5 -Width 1315 -Height 100 -Columns $cols `
+    -BackgroundColor ([System.Drawing.Color]::FromArgb(220, 255, 220))
 
 $tabNouveaux.Controls.Add($dataGridNouveaux)
 [void]$tabControlDiff.TabPages.Add($tabNouveaux)
@@ -461,35 +736,61 @@ $tabPartis = New-Object System.Windows.Forms.TabPage
 $tabPartis.Text = 'EMPLOYES PARTIS'
 $tabPartis.BackColor = [System.Drawing.Color]::White
 
-$dataGridPartis = New-Object System.Windows.Forms.DataGridView
-$dataGridPartis.Location = New-Object System.Drawing.Point(5, 5)
-$dataGridPartis.Size = New-Object System.Drawing.Size(1315, 100)
-$dataGridPartis.AllowUserToAddRows = $false
-$dataGridPartis.AllowUserToDeleteRows = $false
-$dataGridPartis.ReadOnly = $true
-$dataGridPartis.SelectionMode = 'FullRowSelect'
-$dataGridPartis.AutoSizeColumnsMode = 'Fill'
-$dataGridPartis.BackgroundColor = [System.Drawing.Color]::FromArgb(255, 220, 220)
-
-foreach ($colName in $cols) {
-    $col = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-    $col.HeaderText = $colName
-    $col.Name = $colName
-    [void]$dataGridPartis.Columns.Add($col)
-}
+$dataGridPartis = New-CustomDataGrid -X 5 -Y 5 -Width 1315 -Height 100 -Columns $cols `
+    -BackgroundColor ([System.Drawing.Color]::FromArgb(255, 220, 220))
 
 $tabPartis.Controls.Add($dataGridPartis)
 [void]$tabControlDiff.TabPages.Add($tabPartis)
+
+# Onglet Modifications
+$tabModifications = New-Object System.Windows.Forms.TabPage
+$tabModifications.Text = 'MODIFICATIONS'
+$tabModifications.BackColor = [System.Drawing.Color]::White
+
+$colsModif = @("Nom", "Prenom", "SamAccountName", "Changements", "Ancien Ext", "Nouvel Ext", "Ancienne Ville", "Nouvelle Ville")
+$dataGridModifications = New-CustomDataGrid -X 5 -Y 5 -Width 1315 -Height 100 -Columns $colsModif `
+    -BackgroundColor ([System.Drawing.Color]::FromArgb(255, 248, 220))
+
+$tabModifications.Controls.Add($dataGridModifications)
+[void]$tabControlDiff.TabPages.Add($tabModifications)
 
 $panelDiff.Controls.Add($lblDiffTitle)
 $panelDiff.Controls.Add($lblDiffStats)
 $panelDiff.Controls.Add($tabControlDiff)
 $form.Controls.Add($panelDiff)
 
+# ===== BOUTON EXPORT =====
+$btnExport = New-Object System.Windows.Forms.Button
+$btnExport.Location = New-Object System.Drawing.Point(560, 760)
+$btnExport.Size = New-Object System.Drawing.Size(280, 35)
+$btnExport.Text = 'EXPORTER LES RESULTATS (CSV)'
+$btnExport.BackColor = $colorWarning
+$btnExport.ForeColor = [System.Drawing.Color]::White
+$btnExport.FlatStyle = 'Flat'
+$btnExport.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
+$btnExport.Enabled = $false
+$btnExport.Add_Click({
+    if ($script:lastComparison) {
+        $saveDialog = New-Object System.Windows.Forms.SaveFileDialog
+        $saveDialog.Filter = 'Fichiers CSV (*.csv)|*.csv'
+        $saveDialog.Title = "Enregistrer les resultats"
+        $saveDialog.FileName = "Comparaison_Repertoire_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+
+        if ($saveDialog.ShowDialog() -eq 'OK') {
+            Export-ComparisonResults `
+                -Nouveaux $script:lastComparison.Nouveaux `
+                -Partis $script:lastComparison.Partis `
+                -Modifications $script:lastComparison.Modifications `
+                -OutputPath $saveDialog.FileName
+        }
+    }
+})
+$form.Controls.Add($btnExport)
+
 # Fonction de comparaison
 function Compare-AndDisplay {
     $comparison = Compare-Data -ADData $script:adData -FileData $script:fileData
-    
+
     if ($comparison) {
         # Nouveaux
         $dataGridNouveaux.Rows.Clear()
@@ -499,7 +800,7 @@ function Compare-AndDisplay {
                 $user.Ville, $user.Email, $user.SamAccountName
             )
         }
-        
+
         # Partis
         $dataGridPartis.Rows.Clear()
         foreach ($user in $comparison.Partis) {
@@ -508,20 +809,41 @@ function Compare-AndDisplay {
                 $user.Ville, $user.Email, $user.SamAccountName
             )
         }
-        
+
+        # Modifications
+        $dataGridModifications.Rows.Clear()
+        foreach ($modif in $comparison.Modifications) {
+            [void]$dataGridModifications.Rows.Add(
+                $modif.Nom, $modif.Prenom, $modif.SamAccountName,
+                $modif.Changements, $modif.AncienneExtension, $modif.NouvelleExtension,
+                $modif.AncienneVille, $modif.NouvelleVille
+            )
+        }
+
         # Stats
         $nouveauxCount = $comparison.Nouveaux.Count
         $partisCount = $comparison.Partis.Count
-        $lblDiffStats.Text = "NOUVEAUX: $nouveauxCount  |  PARTIS: $partisCount"
-        
-        if ($nouveauxCount -gt 0) {
-            $lblDiffStats.ForeColor = $colorSuccess
+        $modifCount = $comparison.Modifications.Count
+        $lblDiffStats.Text = "NOUVEAUX: $nouveauxCount  |  PARTIS: $partisCount  |  MODIFICATIONS: $modifCount"
+
+        if ($nouveauxCount -gt 0 -or $modifCount -gt 0) {
+            $lblDiffStats.ForeColor = $colorWarning
         } elseif ($partisCount -gt 0) {
             $lblDiffStats.ForeColor = $colorDanger
         } else {
             $lblDiffStats.ForeColor = $colorPrimary
             $lblDiffStats.Text = "Aucune difference detectee"
         }
+
+        # Activer le bouton export si des différences existent
+        if ($nouveauxCount -gt 0 -or $partisCount -gt 0 -or $modifCount -gt 0) {
+            $btnExport.Enabled = $true
+        } else {
+            $btnExport.Enabled = $false
+        }
+
+        # Stocker pour l'export
+        $script:lastComparison = $comparison
     }
 }
 

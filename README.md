@@ -1,2 +1,88 @@
-# extensions
-Comparaison Extensions 
+# Comparateur de Répertoire Téléphonique
+
+Interface graphique PowerShell pour comparer les extensions téléphoniques des utilisateurs entre Active Directory et un fichier Excel.
+
+## Fonctionnalités
+
+### 🔍 Détection Complète des Changements
+- **Nouveaux employés** : Détecte les utilisateurs présents dans AD mais absents du fichier Excel
+- **Employés partis** : Identifie les utilisateurs dans le fichier Excel mais plus dans AD
+- **Modifications** : Détecte automatiquement les changements de :
+  - Extensions téléphoniques
+  - Adresses
+  - Villes
+  - Succursales
+  - Codes postaux
+  - Emails
+
+### 📊 Interface Graphique Améliorée
+- **3 onglets de résultats** :
+  - Nouveaux employés (fond vert)
+  - Employés partis (fond rouge)
+  - **Modifications** (fond jaune) - Affiche côte à côte les anciennes et nouvelles valeurs
+
+### 🔎 Filtres de Recherche en Temps Réel
+- Filtrage dynamique dans les panneaux AD et Fichier
+- Recherche par :
+  - Nom
+  - Prénom
+  - Succursale
+  - Extension
+
+### 💾 Export des Résultats
+- Export CSV avec encodage UTF-8 (compatible Excel)
+- Inclut tous les types de changements :
+  - Nouveaux
+  - Partis
+  - Modifications avec détails des changements
+- Nom de fichier automatique avec horodatage
+
+### ⚡ Performance Optimisée
+- **Cache intelligent des données AD** :
+  - Valide pendant 5 minutes
+  - Évite les rechargements inutiles
+  - Indication visuelle "(depuis cache)"
+- **Barre de progression** pour toutes les opérations longues
+- **Normalisation des extensions** : Compare correctement même avec espaces/tirets différents
+
+### 🛠️ Améliorations Techniques
+- Code refactorisé avec fonction helper `New-CustomDataGrid`
+- Comparaison insensible à la casse des SamAccountName
+- Gestion d'erreurs robuste
+- Interface responsive et moderne
+
+## Utilisation
+
+1. Lancer le script PowerShell
+2. Cliquer sur "CHARGER DEPUIS AD" pour récupérer les données Active Directory
+3. Cliquer sur "CHARGER FICHIER EXCEL" pour importer le fichier de référence
+4. La comparaison s'effectue automatiquement
+5. Consulter les résultats dans les 3 onglets
+6. Utiliser les filtres pour rechercher des utilisateurs spécifiques
+7. Cliquer sur "EXPORTER LES RESULTATS (CSV)" pour sauvegarder
+
+## Configuration
+
+Le script utilise les paramètres suivants (modifiables dans le code) :
+- `$OUPath` : Chemin de l'OU dans Active Directory
+- `$locationMapping` : Mapping des codes postaux vers les succursales
+- `$cacheValidityMinutes` : Durée de validité du cache AD (5 minutes par défaut)
+
+## Prérequis
+
+- Windows PowerShell 5.1+
+- Module Active Directory
+- Microsoft Excel (pour l'import de fichiers Excel)
+- Droits de lecture sur l'OU Active Directory configurée
+
+## Améliorations Version 2
+
+### Nouvelles fonctionnalités (février 2026)
+✅ Détection des changements d'extension
+✅ Onglet "Modifications" avec vue détaillée ancien/nouveau
+✅ Export CSV complet des résultats
+✅ Filtres de recherche en temps réel
+✅ Barre de progression pour les opérations longues
+✅ Cache intelligent des données AD
+✅ Refactorisation du code (évite la duplication)
+✅ Normalisation des extensions pour comparaison précise
