@@ -655,8 +655,8 @@ Write-Host "========================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "Fichier: $outputPath" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "Ouvrir le rapport? (O/N)" -ForegroundColor Yellow -NoNewline
-$response = Read-Host " "
+Write-Host "Ouvrir le rapport? (O/N) " -ForegroundColor Yellow -NoNewline
+$response = Read-Host
 if ($response -eq 'O' -or $response -eq 'o') {
     Start-Process $outputPath
 }
