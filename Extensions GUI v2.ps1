@@ -254,7 +254,7 @@ function Get-AllPhoneDirectory {
                 -UserPostalCode ($postalCode -as [string]) `
                 -Succursales    $script:succursalesData
 
-            $branchLabel  = "Non classé"
+            $branchLabel  = "Non classe"
             $branchNumero = ""
             $branchType   = ""
             if ($succMatch) {
@@ -265,12 +265,19 @@ function Get-AllPhoneDirectory {
                 $branchLabel = $city
             }
 
+            # Extraire le nom du manager depuis le DN (ex: "CN=John Doe,OU=..." -> "John Doe")
+            $managerName = if ($user.Manager) {
+                ($user.Manager -split ',')[0] -replace '^CN=', ''
+            } else { "" }
+
             $allUsers += [PSCustomObject]@{
                 Succursale        = $branchLabel
                 NumeroSuccursale  = $branchNumero
                 TypeSuccursale    = $branchType
                 Nom               = if ($user.Surname)      { $user.Surname }      else { "" }
                 Prenom            = if ($user.GivenName)    { $user.GivenName }    else { "" }
+                Fonction          = if ($user.Title)        { $user.Title }        else { "" }
+                Manager           = $managerName
                 Adresse           = if ($address)           { $address }           else { "" }
                 Ville             = if ($city)              { $city }              else { "" }
                 CodePostal        = if ($postalCode)        { $postalCode }        else { "" }
@@ -409,7 +416,7 @@ function Export-ToExcelFormatted {
         $colorRowOdd    = 0xFFFFFF
 
         # ── En-têtes ────────────────────────────────────────────────────────
-        $headers = @("Succursale","#","Type","Nom","Prénom","Extension","Adresse","Ville","Code Postal","Email","SamAccountName")
+        $headers = @("#","Succursale","Nom","Prenom","Extension","Manager","Fonction","Adresse","Ville","Code Postal","Email","SamAccountName")
         for ($c = 1; $c -le $headers.Count; $c++) {
             $cell = $worksheet.Cells.Item(1, $c)
             $cell.Value2 = $headers[$c - 1]
@@ -457,12 +464,13 @@ function Export-ToExcelFormatted {
             $bgRow = if ($dataRowNum % 2 -eq 0) { $colorRowEven } else { $colorRowOdd }
 
             $vals = @(
-                $user.Succursale,
                 $user.NumeroSuccursale,
-                $user.TypeSuccursale,
+                $user.Succursale,
                 $user.Nom,
                 $user.Prenom,
                 $user.Extension,
+                $user.Manager,
+                $user.Fonction,
                 $user.Adresse,
                 $user.Ville,
                 $user.CodePostal,
@@ -474,8 +482,8 @@ function Export-ToExcelFormatted {
                 $cell = $worksheet.Cells.Item($rowIndex, $c)
                 $cell.Value2 = $vals[$c - 1]
                 $cell.Interior.Color = $bgRow
-                # Nom en gras
-                if ($c -eq 4) { $cell.Font.Bold = $true }
+                # Nom en gras (colonne 3)
+                if ($c -eq 3) { $cell.Font.Bold = $true }
             }
 
             $rowIndex++
@@ -1066,8 +1074,8 @@ $btnExportAD.Add_Click({
                 }
             } else {
                 $script:adData | Sort-Object NumeroSuccursale, Nom, Prenom |
-                    Select-Object Succursale, NumeroSuccursale, TypeSuccursale,
-                                  Nom, Prenom, Extension, Adresse, Ville, CodePostal, Email, SamAccountName |
+                    Select-Object NumeroSuccursale, Succursale,
+                                  Nom, Prenom, Extension, Manager, Fonction, Adresse, Ville, CodePostal, Email, SamAccountName |
                     Export-Csv -Path $path -NoTypeInformation -Encoding UTF8
                 [System.Windows.Forms.MessageBox]::Show(
                     "Export CSV réussi: $path`nTotal: $($script:adData.Count) utilisateurs.",
