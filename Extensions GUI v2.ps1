@@ -404,6 +404,7 @@ function Export-ToExcelFormatted {
         $excel = New-Object -ComObject Excel.Application
         $excel.Visible = $false
         $excel.DisplayAlerts = $false
+        $excel.Interactive = $false
         $workbook  = $excel.Workbooks.Add()
         $worksheet = $workbook.Worksheets.Item(1)
         $worksheet.Name = $SheetTitle
