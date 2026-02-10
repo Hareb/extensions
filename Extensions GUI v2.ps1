@@ -528,6 +528,7 @@ $btnLoadAD.Add_Click({
         $cacheStatus = if ($useCache) { " (depuis cache)" } else { "" }
         $lblADCount.Text = "Total: $($script:adData.Count) utilisateurs$cacheStatus"
         $lblADCount.ForeColor = $colorSuccess
+        $btnExportAD.Enabled = $true
 
         # Si les deux sont chargés, comparer automatiquement
         if ($script:fileData) {
@@ -634,6 +635,7 @@ $btnLoadFile.Add_Click({
             }
             $lblFileCount.Text = "Total: $($script:fileData.Count) utilisateurs"
             $lblFileCount.ForeColor = $colorSuccess
+            $btnExportFile.Enabled = $true
 
             # Si les deux sont chargés, comparer automatiquement
             if ($script:adData) {
@@ -759,15 +761,71 @@ $panelDiff.Controls.Add($lblDiffStats)
 $panelDiff.Controls.Add($tabControlDiff)
 $form.Controls.Add($panelDiff)
 
-# ===== BOUTON EXPORT =====
+# ===== BOUTONS D'EXPORT (barre basse) =====
+
+# Bouton Export Répertoire AD
+$btnExportAD = New-Object System.Windows.Forms.Button
+$btnExportAD.Location = New-Object System.Drawing.Point(10, 762)
+$btnExportAD.Size = New-Object System.Drawing.Size(310, 35)
+$btnExportAD.Text = 'EXPORTER REPERTOIRE AD (CSV)'
+$btnExportAD.BackColor = $colorPrimary
+$btnExportAD.ForeColor = [System.Drawing.Color]::White
+$btnExportAD.FlatStyle = 'Flat'
+$btnExportAD.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
+$btnExportAD.Enabled = $false
+$btnExportAD.Add_Click({
+    if ($script:adData) {
+        $saveDialog = New-Object System.Windows.Forms.SaveFileDialog
+        $saveDialog.Filter = 'Fichiers CSV (*.csv)|*.csv'
+        $saveDialog.Title = "Enregistrer le repertoire AD"
+        $saveDialog.FileName = "Repertoire_AD_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+        if ($saveDialog.ShowDialog() -eq 'OK') {
+            $script:adData | Select-Object Succursale, Nom, Prenom, Extension, Adresse, Ville, CodePostal, Email, SamAccountName |
+                Export-Csv -Path $saveDialog.FileName -NoTypeInformation -Encoding UTF8
+            [System.Windows.Forms.MessageBox]::Show(
+                "Export réussi: $($saveDialog.FileName)`nTotal: $($script:adData.Count) utilisateurs",
+                "Export AD terminé", 'OK', 'Information')
+        }
+    }
+})
+$form.Controls.Add($btnExportAD)
+
+# Bouton Export Répertoire Fichier
+$btnExportFile = New-Object System.Windows.Forms.Button
+$btnExportFile.Location = New-Object System.Drawing.Point(330, 762)
+$btnExportFile.Size = New-Object System.Drawing.Size(310, 35)
+$btnExportFile.Text = 'EXPORTER REPERTOIRE FICHIER (CSV)'
+$btnExportFile.BackColor = $colorSuccess
+$btnExportFile.ForeColor = [System.Drawing.Color]::White
+$btnExportFile.FlatStyle = 'Flat'
+$btnExportFile.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
+$btnExportFile.Enabled = $false
+$btnExportFile.Add_Click({
+    if ($script:fileData) {
+        $saveDialog = New-Object System.Windows.Forms.SaveFileDialog
+        $saveDialog.Filter = 'Fichiers CSV (*.csv)|*.csv'
+        $saveDialog.Title = "Enregistrer le repertoire Fichier"
+        $saveDialog.FileName = "Repertoire_Fichier_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+        if ($saveDialog.ShowDialog() -eq 'OK') {
+            $script:fileData | Select-Object Succursale, Nom, Prenom, Extension, Adresse, Ville, CodePostal, Email, SamAccountName |
+                Export-Csv -Path $saveDialog.FileName -NoTypeInformation -Encoding UTF8
+            [System.Windows.Forms.MessageBox]::Show(
+                "Export réussi: $($saveDialog.FileName)`nTotal: $($script:fileData.Count) utilisateurs",
+                "Export Fichier terminé", 'OK', 'Information')
+        }
+    }
+})
+$form.Controls.Add($btnExportFile)
+
+# Bouton Export Différences
 $btnExport = New-Object System.Windows.Forms.Button
-$btnExport.Location = New-Object System.Drawing.Point(560, 760)
-$btnExport.Size = New-Object System.Drawing.Size(280, 35)
-$btnExport.Text = 'EXPORTER LES RESULTATS (CSV)'
+$btnExport.Location = New-Object System.Drawing.Point(650, 762)
+$btnExport.Size = New-Object System.Drawing.Size(310, 35)
+$btnExport.Text = 'EXPORTER LES DIFFERENCES (CSV)'
 $btnExport.BackColor = $colorWarning
 $btnExport.ForeColor = [System.Drawing.Color]::White
 $btnExport.FlatStyle = 'Flat'
-$btnExport.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
+$btnExport.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
 $btnExport.Enabled = $false
 $btnExport.Add_Click({
     if ($script:lastComparison) {
@@ -775,7 +833,6 @@ $btnExport.Add_Click({
         $saveDialog.Filter = 'Fichiers CSV (*.csv)|*.csv'
         $saveDialog.Title = "Enregistrer les resultats"
         $saveDialog.FileName = "Comparaison_Repertoire_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
-
         if ($saveDialog.ShowDialog() -eq 'OK') {
             Export-ComparisonResults `
                 -Nouveaux $script:lastComparison.Nouveaux `
