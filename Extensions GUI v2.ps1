@@ -290,16 +290,47 @@ function Get-AllPhoneDirectory {
 
 function Load-ExcelFile {
     param([string]$FilePath)
-    
+
+    # ── Chargement CSV ──────────────────────────────────────────────────────
+    if ($FilePath -like "*.csv") {
+        try {
+            $raw = Import-Csv -Path $FilePath -Encoding UTF8
+            # Accepter "CodePostal" ou "Code Postal" (les deux formats possibles)
+            $fileUsers = $raw | Where-Object { $_.SamAccountName -and $_.SamAccountName -ne "" } |
+                ForEach-Object {
+                    $cp = if ($_.PSObject.Properties['CodePostal'])  { $_.'CodePostal'  }
+                          elseif ($_.PSObject.Properties['Code Postal']) { $_.'Code Postal' }
+                          else { "" }
+                    [PSCustomObject]@{
+                        Succursale     = $_.Succursale
+                        Nom            = $_.Nom
+                        Prenom         = $_.Prenom
+                        Adresse        = $_.Adresse
+                        Ville          = $_.Ville
+                        CodePostal     = $cp
+                        Extension      = $_.Extension
+                        Email          = $_.Email
+                        SamAccountName = $_.SamAccountName.Trim()
+                    }
+                }
+            return $fileUsers | Sort-Object Nom, Prenom
+        }
+        catch {
+            [System.Windows.Forms.MessageBox]::Show("Erreur lecture CSV: $($_.Exception.Message)", "Erreur")
+            return $null
+        }
+    }
+
+    # ── Chargement Excel (xlsx / xls) ───────────────────────────────────────
     try {
         Get-Process excel -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 1
-        
+
         $excel = New-Object -ComObject Excel.Application
         $excel.Visible = $false
         $excel.DisplayAlerts = $false
         $workbook = $excel.Workbooks.Open($FilePath)
-        
+
         $worksheet = $null
         foreach ($sheet in $workbook.Worksheets) {
             if ($sheet.Name -like "*epertoire*" -or $sheet.Name -eq "Sheet1") {
@@ -307,52 +338,175 @@ function Load-ExcelFile {
                 break
             }
         }
-        if (-not $worksheet) {
-            $worksheet = $workbook.Worksheets.Item(1)
-        }
-        
+        if (-not $worksheet) { $worksheet = $workbook.Worksheets.Item(1) }
+
         $lastRow = $worksheet.UsedRange.Rows.Count
         $lastCol = $worksheet.UsedRange.Columns.Count
-        
-        # Trouver les colonnes
+
         $colMap = @{}
         for ($col = 1; $col -le $lastCol; $col++) {
             $header = $worksheet.Cells.Item(1, $col).Text
             $colMap[$header] = $col
         }
-        
+
+        # Clé code postal tolérante
+        $cpKey = if ($colMap.ContainsKey("CodePostal")) { "CodePostal" } else { "Code Postal" }
+
         $fileUsers = @()
         for ($i = 2; $i -le $lastRow; $i++) {
             $sam = $worksheet.Cells.Item($i, $colMap["SamAccountName"]).Text
             if ($sam -and $sam -ne "") {
                 $fileUsers += [PSCustomObject]@{
-                    Succursale = $worksheet.Cells.Item($i, $colMap["Succursale"]).Text
-                    Nom = $worksheet.Cells.Item($i, $colMap["Nom"]).Text
-                    Prenom = $worksheet.Cells.Item($i, $colMap["Prenom"]).Text
-                    Adresse = $worksheet.Cells.Item($i, $colMap["Adresse"]).Text
-                    Ville = $worksheet.Cells.Item($i, $colMap["Ville"]).Text
-                    CodePostal = $worksheet.Cells.Item($i, $colMap["Code Postal"]).Text
-                    Extension = $worksheet.Cells.Item($i, $colMap["Extension"]).Text
-                    Email = $worksheet.Cells.Item($i, $colMap["Email"]).Text
+                    Succursale     = $worksheet.Cells.Item($i, $colMap["Succursale"]).Text
+                    Nom            = $worksheet.Cells.Item($i, $colMap["Nom"]).Text
+                    Prenom         = $worksheet.Cells.Item($i, $colMap["Prenom"]).Text
+                    Adresse        = $worksheet.Cells.Item($i, $colMap["Adresse"]).Text
+                    Ville          = $worksheet.Cells.Item($i, $colMap["Ville"]).Text
+                    CodePostal     = if ($colMap[$cpKey]) { $worksheet.Cells.Item($i, $colMap[$cpKey]).Text } else { "" }
+                    Extension      = $worksheet.Cells.Item($i, $colMap["Extension"]).Text
+                    Email          = $worksheet.Cells.Item($i, $colMap["Email"]).Text
                     SamAccountName = $sam.Trim()
                 }
             }
         }
-        
+
         $workbook.Close($false)
         $excel.Quit()
-        
         [System.Runtime.Interopservices.Marshal]::ReleaseComObject($worksheet) | Out-Null
-        [System.Runtime.Interopservices.Marshal]::ReleaseComObject($workbook) | Out-Null
-        [System.Runtime.Interopservices.Marshal]::ReleaseComObject($excel) | Out-Null
+        [System.Runtime.Interopservices.Marshal]::ReleaseComObject($workbook)  | Out-Null
+        [System.Runtime.Interopservices.Marshal]::ReleaseComObject($excel)     | Out-Null
         [System.GC]::Collect()
         [System.GC]::WaitForPendingFinalizers()
-        
+
         return $fileUsers | Sort-Object Nom, Prenom
     }
     catch {
         [System.Windows.Forms.MessageBox]::Show("Erreur lecture Excel: $($_.Exception.Message)", "Erreur")
         return $null
+    }
+}
+
+function Export-ToExcelFormatted {
+    param(
+        $Data,
+        [string]$OutputPath,
+        [string]$SheetTitle = "Répertoire"
+    )
+
+    try {
+        $excel = New-Object -ComObject Excel.Application
+        $excel.Visible = $false
+        $excel.DisplayAlerts = $false
+        $workbook  = $excel.Workbooks.Add()
+        $worksheet = $workbook.Worksheets.Item(1)
+        $worksheet.Name = $SheetTitle
+
+        # ── Couleurs ────────────────────────────────────────────────────────
+        $colorHeader    = 0x0078D7   # Bleu (BGR → Excel XlRgbColor attend BGR inversé mais on utilise RGB int)
+        $colorSuccTitle = 0xD4E6F1   # Bleu clair  pour ligne succursale
+        $colorEPTitle   = 0xFDE8D8   # Rose clair pour Espace Plombérium
+        $colorRowEven   = 0xF7F9FC
+        $colorRowOdd    = 0xFFFFFF
+
+        # ── En-têtes ────────────────────────────────────────────────────────
+        $headers = @("Succursale","#","Type","Nom","Prénom","Extension","Adresse","Ville","Code Postal","Email","SamAccountName")
+        for ($c = 1; $c -le $headers.Count; $c++) {
+            $cell = $worksheet.Cells.Item(1, $c)
+            $cell.Value2 = $headers[$c - 1]
+            $cell.Font.Bold = $true
+            $cell.Font.Color = 0xFFFFFF
+            $cell.Interior.Color = $colorHeader
+            $cell.HorizontalAlignment = -4108  # xlCenter
+        }
+
+        # Figer la ligne d'en-tête
+        $worksheet.Rows.Item(1).RowHeight = 20
+        $worksheet.Application.ActiveWindow.SplitRow = 1
+        $worksheet.Application.ActiveWindow.FreezePanes = $true
+
+        # ── Données triées par succursale ────────────────────────────────────
+        $sorted = $Data | Sort-Object {
+            $n = [int]0
+            if ([int]::TryParse($_.NumeroSuccursale, [ref]$n)) { $n } else { 999 }
+        }, Nom, Prenom
+
+        $currentSucc = ""
+        $rowIndex    = 2
+        $dataRowNum  = 0   # Pour alterner les couleurs
+
+        foreach ($user in $sorted) {
+            # Ligne de groupe si nouvelle succursale
+            if ($user.Succursale -ne $currentSucc) {
+                $currentSucc = $user.Succursale
+                $dataRowNum  = 0
+
+                $groupCell = $worksheet.Range($worksheet.Cells.Item($rowIndex, 1), $worksheet.Cells.Item($rowIndex, $headers.Count))
+                $groupCell.Merge()
+                $groupCell.Cells.Item(1,1).Value2 = "  $($user.Succursale.ToUpper())  —  $($user.TypeSuccursale)"
+                $groupCell.Cells.Item(1,1).Font.Bold = $true
+                $groupCell.Cells.Item(1,1).Font.Size = 11
+
+                $bgColor = if ($user.TypeSuccursale -eq "Espace Plomberium") { $colorEPTitle } else { $colorSuccTitle }
+                $groupCell.Interior.Color = $bgColor
+
+                $worksheet.Rows.Item($rowIndex).RowHeight = 18
+                $rowIndex++
+            }
+
+            # Ligne employé
+            $bgRow = if ($dataRowNum % 2 -eq 0) { $colorRowEven } else { $colorRowOdd }
+
+            $vals = @(
+                $user.Succursale,
+                $user.NumeroSuccursale,
+                $user.TypeSuccursale,
+                $user.Nom,
+                $user.Prenom,
+                $user.Extension,
+                $user.Adresse,
+                $user.Ville,
+                $user.CodePostal,
+                $user.Email,
+                $user.SamAccountName
+            )
+
+            for ($c = 1; $c -le $vals.Count; $c++) {
+                $cell = $worksheet.Cells.Item($rowIndex, $c)
+                $cell.Value2 = $vals[$c - 1]
+                $cell.Interior.Color = $bgRow
+                # Nom en gras
+                if ($c -eq 4) { $cell.Font.Bold = $true }
+            }
+
+            $rowIndex++
+            $dataRowNum++
+        }
+
+        # ── Ajustement automatique des largeurs ─────────────────────────────
+        $usedRange = $worksheet.UsedRange
+        $usedRange.Columns.AutoFit() | Out-Null
+
+        # Bordures légères sur les données
+        $dataRange = $worksheet.Range($worksheet.Cells.Item(1,1), $worksheet.Cells.Item($rowIndex-1, $headers.Count))
+        $dataRange.Borders.LineStyle = 1   # xlContinuous
+        $dataRange.Borders.Weight    = 2   # xlThin
+
+        # ── Sauvegarde ──────────────────────────────────────────────────────
+        # 51 = xlOpenXMLWorkbook (.xlsx)
+        $workbook.SaveAs($OutputPath, 51)
+        $workbook.Close($false)
+        $excel.Quit()
+        [System.Runtime.Interopservices.Marshal]::ReleaseComObject($worksheet) | Out-Null
+        [System.Runtime.Interopservices.Marshal]::ReleaseComObject($workbook)  | Out-Null
+        [System.Runtime.Interopservices.Marshal]::ReleaseComObject($excel)     | Out-Null
+        [System.GC]::Collect()
+        [System.GC]::WaitForPendingFinalizers()
+        return $true
+    }
+    catch {
+        [System.Windows.Forms.MessageBox]::Show("Erreur export Excel: $($_.Exception.Message)", "Erreur")
+        try { $excel.Quit() } catch {}
+        return $false
     }
 }
 
@@ -734,8 +888,8 @@ $btnLoadFile.FlatStyle = 'Flat'
 $btnLoadFile.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
 $btnLoadFile.Add_Click({
     $openDialog = New-Object System.Windows.Forms.OpenFileDialog
-    $openDialog.Filter = 'Fichiers Excel (*.xlsx;*.xls)|*.xlsx;*.xls'
-    $openDialog.Title = "Selectionnez le fichier Excel"
+    $openDialog.Filter = 'Tous les formats supportés (*.xlsx;*.xls;*.csv)|*.xlsx;*.xls;*.csv|Fichiers Excel (*.xlsx;*.xls)|*.xlsx;*.xls|Fichiers CSV (*.csv)|*.csv'
+    $openDialog.Title = "Selectionnez le fichier Excel ou CSV"
 
     if ($openDialog.ShowDialog() -eq 'OK') {
         $btnLoadFile.Enabled = $false
@@ -888,7 +1042,7 @@ $form.Controls.Add($panelDiff)
 $btnExportAD = New-Object System.Windows.Forms.Button
 $btnExportAD.Location = New-Object System.Drawing.Point(10, 762)
 $btnExportAD.Size = New-Object System.Drawing.Size(310, 35)
-$btnExportAD.Text = 'EXPORTER REPERTOIRE AD (CSV)'
+$btnExportAD.Text = 'EXPORTER REPERTOIRE AD (Excel)'
 $btnExportAD.BackColor = $colorPrimary
 $btnExportAD.ForeColor = [System.Drawing.Color]::White
 $btnExportAD.FlatStyle = 'Flat'
@@ -897,17 +1051,28 @@ $btnExportAD.Enabled = $false
 $btnExportAD.Add_Click({
     if ($script:adData) {
         $saveDialog = New-Object System.Windows.Forms.SaveFileDialog
-        $saveDialog.Filter = 'Fichiers CSV (*.csv)|*.csv'
+        $saveDialog.Filter = 'Fichier Excel (*.xlsx)|*.xlsx|Fichier CSV (*.csv)|*.csv'
         $saveDialog.Title = "Enregistrer le repertoire AD"
-        $saveDialog.FileName = "Repertoire_AD_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+        $saveDialog.FileName = "Repertoire_AD_$(Get-Date -Format 'yyyyMMdd_HHmmss').xlsx"
         if ($saveDialog.ShowDialog() -eq 'OK') {
-            $script:adData | Sort-Object NumeroSuccursale, Nom, Prenom |
-                Select-Object Succursale, NumeroSuccursale, TypeSuccursale,
-                              Nom, Prenom, Extension, Adresse, Ville, CodePostal, Email, SamAccountName |
-                Export-Csv -Path $saveDialog.FileName -NoTypeInformation -Encoding UTF8
-            [System.Windows.Forms.MessageBox]::Show(
-                "Export réussi: $($saveDialog.FileName)`nTotal: $($script:adData.Count) utilisateurs`nTrié par succursale.",
-                "Export AD terminé", 'OK', 'Information')
+            $path = $saveDialog.FileName
+            # Export Excel formaté ou CSV selon le choix
+            if ($path -like "*.xlsx") {
+                $ok = Export-ToExcelFormatted -Data $script:adData -OutputPath $path -SheetTitle "Repertoire AD"
+                if ($ok) {
+                    [System.Windows.Forms.MessageBox]::Show(
+                        "Export Excel réussi: $path`nTotal: $($script:adData.Count) utilisateurs`nTrié et groupé par succursale.",
+                        "Export AD terminé", 'OK', 'Information')
+                }
+            } else {
+                $script:adData | Sort-Object NumeroSuccursale, Nom, Prenom |
+                    Select-Object Succursale, NumeroSuccursale, TypeSuccursale,
+                                  Nom, Prenom, Extension, Adresse, Ville, CodePostal, Email, SamAccountName |
+                    Export-Csv -Path $path -NoTypeInformation -Encoding UTF8
+                [System.Windows.Forms.MessageBox]::Show(
+                    "Export CSV réussi: $path`nTotal: $($script:adData.Count) utilisateurs.",
+                    "Export AD terminé", 'OK', 'Information')
+            }
         }
     }
 })
