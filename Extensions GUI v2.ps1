@@ -442,7 +442,7 @@ function Export-ToExcelFormatted {
 
                 $groupCell = $worksheet.Range($worksheet.Cells.Item($rowIndex, 1), $worksheet.Cells.Item($rowIndex, $headers.Count))
                 $groupCell.Merge()
-                $groupCell.Cells.Item(1,1).Value2 = "  $($user.Succursale.ToUpper())  —  $($user.TypeSuccursale)"
+                $groupCell.Cells.Item(1,1).Value2 = "  $($user.Succursale.ToUpper())  -  $($user.TypeSuccursale)"
                 $groupCell.Cells.Item(1,1).Font.Bold = $true
                 $groupCell.Cells.Item(1,1).Font.Size = 11
 
