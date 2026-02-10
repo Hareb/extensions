@@ -17,16 +17,7 @@ Add-Type -AssemblyName System.Drawing
 # ============================================
 
 $OUPath = "OU=Users,OU=DFL-MTL,OU=Divisions,DC=groupedeschenes,DC=loc"
-
-$locationMapping = @{
-    "Sherbrooke-J1H" = "Sherbrooke"
-    "Sherbrooke-J1L" = "Sherbrooke"
-    "Quebec-G1V" = "Québec"
-    "Montreal-H1Y" = "Montréal"
-    "Laval-H7L" = "Laval"
-    "Drummondville-J2C" = "Drummondville"
-    "Granby-J2G" = "Granby"
-}
+$SuccursalesFile = Join-Path $PSScriptRoot "Succursales addresses.xlsx"
 
 # Variables globales
 $script:adData = $null
@@ -35,6 +26,7 @@ $script:adDataCache = $null
 $script:adDataCacheTime = $null
 $script:cacheValidityMinutes = 5
 $script:lastComparison = $null
+$script:succursalesData = $null
 
 # Couleurs
 $colorPrimary = [System.Drawing.Color]::FromArgb(0, 120, 215)
@@ -88,11 +80,143 @@ function New-CustomDataGrid {
     return $dataGrid
 }
 
-function Get-AllPhoneDirectory {
+function Load-SuccursalesData {
+    param([string]$FilePath)
+
+    if (-not (Test-Path $FilePath)) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "Fichier introuvable: $FilePath`n`nLa classification par succursale sera désactivée.",
+            "Avertissement", 'OK', 'Warning')
+        return $null
+    }
+
+    try {
+        $excel = New-Object -ComObject Excel.Application
+        $excel.Visible = $false
+        $excel.DisplayAlerts = $false
+        $workbook = $excel.Workbooks.Open($FilePath)
+        $worksheet = $workbook.Worksheets.Item(1)
+        $lastRow = $worksheet.UsedRange.Rows.Count
+        $succursales = @()
+
+        for ($i = 2; $i -le $lastRow; $i++) {
+            $nom     = $worksheet.Cells.Item($i, 1).Text.Trim()
+            $adresse = $worksheet.Cells.Item($i, 2).Text.Trim()
+            $numero  = $worksheet.Cells.Item($i, 3).Text.Trim()
+
+            if ($nom -and $nom -notlike "*Liste*" -and $nom -notlike "*liste*" -and $numero) {
+                $isEP = $numero -in @('21','23','24','25','26','27','50')
+                $succursales += [PSCustomObject]@{
+                    Numero   = $numero
+                    Nom      = $nom
+                    Adresse  = $adresse
+                    Type     = if ($isEP) { "Espace Plomberium" } else { "Succursale" }
+                    Keywords = (Get-AddressKeywords "$adresse $nom")
+                }
+            }
+        }
+
+        $workbook.Close($false)
+        $excel.Quit()
+        [System.Runtime.Interopservices.Marshal]::ReleaseComObject($worksheet) | Out-Null
+        [System.Runtime.Interopservices.Marshal]::ReleaseComObject($workbook)  | Out-Null
+        [System.Runtime.Interopservices.Marshal]::ReleaseComObject($excel)     | Out-Null
+        [System.GC]::Collect()
+        [System.GC]::WaitForPendingFinalizers()
+
+        return $succursales
+    }
+    catch {
+        [System.Windows.Forms.MessageBox]::Show("Erreur lecture succursales: $($_.Exception.Message)", "Erreur")
+        return $null
+    }
+}
+
+function Get-AddressKeywords {
+    param([string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) { return @() }
+
+    # Normaliser: minuscules, supprimer accents de base, ponctuation
+    $normalized = $Text.ToLower() -replace '[,\.\#]', ' ' `
+                                  -replace '\s+', ' '
+
+    $stopWords = @('rue','boul','boulevard','avenue','ave','chemin','ch',
+                   'montee','autoroute','voie','qc','quebec','canada',
+                   'est','ouest','nord','sud','boul.','bureau','de','du',
+                   'la','le','les','l','et','en','sur','par','dans')
+    $keywords = @()
+
+    foreach ($word in ($normalized -split '\s+')) {
+        $word = $word.Trim()
+        if ($word.Length -ge 3 -and $word -notin $stopWords) {
+            $keywords += $word
+        }
+    }
+    return $keywords | Select-Object -Unique
+}
+
+function Match-AddressToSuccursale {
     param(
-        [string]$OUSearchBase,
-        [hashtable]$LocationMap
+        [string]$UserAddress,
+        [string]$UserCity,
+        [string]$UserPostalCode,
+        $Succursales
     )
+
+    if (-not $Succursales) { return $null }
+
+    $userText     = "$UserAddress $UserCity $UserPostalCode"
+    $userKeywords = Get-AddressKeywords $userText
+
+    # Postal prefix (ex: "H9H")
+    $postalPrefix = if ($UserPostalCode -and $UserPostalCode.Length -ge 3) {
+        $UserPostalCode.Substring(0,3).ToUpper()
+    } else { "" }
+
+    $bestMatch = $null
+    $bestScore = 0
+
+    foreach ($succ in $Succursales) {
+        $score = 0
+
+        # 1. Correspondance de mots-clés d'adresse
+        foreach ($kw in $userKeywords) {
+            if ($succ.Keywords -contains $kw) { $score += 10 }
+            else {
+                foreach ($sk in $succ.Keywords) {
+                    if ($sk.Length -ge 4 -and ($sk.StartsWith($kw) -or $kw.StartsWith($sk))) {
+                        $score += 5
+                    }
+                }
+            }
+        }
+
+        # 2. Correspondance code postal (très fiable)
+        if ($postalPrefix -and $succ.Adresse -match [regex]::Escape($postalPrefix)) {
+            $score += 30
+        }
+
+        # 3. Correspondance nom de ville vs nom de succursale
+        $succNomClean = $succ.Nom.ToLower() -replace '[-\s]',''
+        $cityClean    = $UserCity.ToLower()  -replace '[-\s]',''
+        if ($cityClean -and $succNomClean -and (
+            $cityClean.Contains($succNomClean) -or $succNomClean.Contains($cityClean)
+        )) { $score += 15 }
+
+        if ($score -gt $bestScore) {
+            $bestScore = $score
+            $bestMatch = $succ
+        }
+    }
+
+    # Seuil minimum pour accepter un match
+    if ($bestScore -ge 15) { return $bestMatch }
+    return $null
+}
+
+function Get-AllPhoneDirectory {
+    param([string]$OUSearchBase)
     
     try {
         $users = Get-ADUser -SearchBase $OUSearchBase -Filter {Enabled -eq $true} `
@@ -118,49 +242,41 @@ function Get-AllPhoneDirectory {
                 continue
             }
             
-            $city = $user.City
+            $city       = $user.City
             if (-not $city) { $city = $user.l }
             if (-not $city) { $city = $user.Office }
-            
             $postalCode = $user.PostalCode
-            $postalPrefix = if ($postalCode -and $postalCode.Length -ge 3) {
-                $postalCode.Substring(0,3).ToUpper()
-            } else {
-                ""
-            }
-            
-            $branch = "Non specifie"
-            if ($city -and $postalPrefix) {
-                $locationKey = "$city-$postalPrefix"
-                if ($LocationMap.ContainsKey($locationKey)) {
-                    $branch = $LocationMap[$locationKey]
-                } else {
-                    $branch = $city
-                }
+
+            # Classification intelligente par succursale
+            $succMatch = Match-AddressToSuccursale `
+                -UserAddress    $address `
+                -UserCity       ($city -as [string]) `
+                -UserPostalCode ($postalCode -as [string]) `
+                -Succursales    $script:succursalesData
+
+            $branchLabel  = "Non classé"
+            $branchNumero = ""
+            $branchType   = ""
+            if ($succMatch) {
+                $branchLabel  = "$($succMatch.Nom) #$($succMatch.Numero)"
+                $branchNumero = $succMatch.Numero
+                $branchType   = $succMatch.Type
             } elseif ($city) {
-                $branch = $city
+                $branchLabel = $city
             }
-            
-            $managerName = ""
-            if ($user.Manager) {
-                try {
-                    $manager = Get-ADUser -Identity $user.Manager -Properties DisplayName -ErrorAction SilentlyContinue
-                    if ($manager) {
-                        $managerName = $manager.DisplayName
-                    }
-                } catch {}
-            }
-            
+
             $allUsers += [PSCustomObject]@{
-                Succursale = $branch
-                Nom = if ($user.Surname) { $user.Surname } else { "" }
-                Prenom = if ($user.GivenName) { $user.GivenName } else { "" }
-                Adresse = if ($address) { $address } else { "" }
-                Ville = if ($city) { $city } else { "" }
-                CodePostal = if ($postalCode) { $postalCode } else { "" }
-                Extension = if ($extension) { $extension } else { "" }
-                Email = if ($user.EmailAddress) { $user.EmailAddress } else { "" }
-                SamAccountName = $user.SamAccountName
+                Succursale        = $branchLabel
+                NumeroSuccursale  = $branchNumero
+                TypeSuccursale    = $branchType
+                Nom               = if ($user.Surname)      { $user.Surname }      else { "" }
+                Prenom            = if ($user.GivenName)    { $user.GivenName }    else { "" }
+                Adresse           = if ($address)           { $address }           else { "" }
+                Ville             = if ($city)              { $city }              else { "" }
+                CodePostal        = if ($postalCode)        { $postalCode }        else { "" }
+                Extension         = if ($extension)         { $extension }         else { "" }
+                Email             = if ($user.EmailAddress) { $user.EmailAddress } else { "" }
+                SamAccountName    = $user.SamAccountName
             }
         }
         
@@ -492,6 +608,11 @@ $btnLoadAD.Add_Click({
     $progressBar.Visible = $true
     $progressBar.Value = 0
 
+    # Charger les succursales si pas encore fait
+    if (-not $script:succursalesData) {
+        $script:succursalesData = Load-SuccursalesData -FilePath $SuccursalesFile
+    }
+
     # Vérifier si le cache est valide
     $useCache = $false
     if ($script:adDataCache -and $script:adDataCacheTime) {
@@ -506,7 +627,7 @@ $btnLoadAD.Add_Click({
     # Charger depuis AD si pas de cache valide
     if (-not $useCache) {
         $progressBar.Value = 10
-        $script:adData = Get-AllPhoneDirectory -OUSearchBase $OUPath -LocationMap $locationMapping
+        $script:adData = Get-AllPhoneDirectory -OUSearchBase $OUPath
         $progressBar.Value = 80
 
         # Mettre à jour le cache
@@ -780,10 +901,12 @@ $btnExportAD.Add_Click({
         $saveDialog.Title = "Enregistrer le repertoire AD"
         $saveDialog.FileName = "Repertoire_AD_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
         if ($saveDialog.ShowDialog() -eq 'OK') {
-            $script:adData | Select-Object Succursale, Nom, Prenom, Extension, Adresse, Ville, CodePostal, Email, SamAccountName |
+            $script:adData | Sort-Object NumeroSuccursale, Nom, Prenom |
+                Select-Object Succursale, NumeroSuccursale, TypeSuccursale,
+                              Nom, Prenom, Extension, Adresse, Ville, CodePostal, Email, SamAccountName |
                 Export-Csv -Path $saveDialog.FileName -NoTypeInformation -Encoding UTF8
             [System.Windows.Forms.MessageBox]::Show(
-                "Export réussi: $($saveDialog.FileName)`nTotal: $($script:adData.Count) utilisateurs",
+                "Export réussi: $($saveDialog.FileName)`nTotal: $($script:adData.Count) utilisateurs`nTrié par succursale.",
                 "Export AD terminé", 'OK', 'Information')
         }
     }
