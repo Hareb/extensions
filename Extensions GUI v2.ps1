@@ -401,10 +401,26 @@ function Export-ToExcelFormatted {
     )
 
     try {
-        $excel = New-Object -ComObject Excel.Application
-        $excel.Visible = $false
+        # Tuer tout processus Excel résiduel (évite RPC_E_CALL_REJECTED)
+        Get-Process excel -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 1500
+
+        # Créer le COM avec retry
+        $excel = $null
+        for ($retry = 0; $retry -lt 3; $retry++) {
+            try {
+                $excel = New-Object -ComObject Excel.Application
+                break
+            } catch {
+                if ($retry -eq 2) { throw }
+                Start-Sleep -Milliseconds 1000
+            }
+        }
+
+        $excel.Visible       = $false
         $excel.DisplayAlerts = $false
-        $excel.Interactive = $false
+        $excel.Interactive   = $false
+        Start-Sleep -Milliseconds 500
         $workbook  = $excel.Workbooks.Add()
         $worksheet = $workbook.Worksheets.Item(1)
         $worksheet.Name = $SheetTitle
