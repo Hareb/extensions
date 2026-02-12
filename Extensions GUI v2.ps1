@@ -105,7 +105,9 @@ function Load-SuccursalesData {
             $numero  = $worksheet.Cells.Item($i, 3).Text.Trim()
 
             if ($nom -and $nom -notlike "*Liste*" -and $nom -notlike "*liste*" -and $numero) {
-                $isEP = $numero -in @('21','23','24','25','26','27','50')
+                $numInt = [int]0
+                [void][int]::TryParse($numero, [ref]$numInt)
+                $isEP = $numInt -in @(21,23,24,25,26,27,50)
                 $succursales += [PSCustomObject]@{
                     Numero   = $numero
                     Nom      = $nom
