@@ -96,13 +96,23 @@ function Load-SuccursalesData {
         $excel.DisplayAlerts = $false
         $workbook = $excel.Workbooks.Open($FilePath)
         $worksheet = $workbook.Worksheets.Item(1)
-        $lastRow = $worksheet.UsedRange.Rows.Count
+        $lastRow  = $worksheet.UsedRange.Rows.Count
+        $lastCol  = $worksheet.UsedRange.Columns.Count
         $succursales = @()
 
+        # Trouver les colonnes par nom d'en-tete (robuste meme si l'utilisateur ajoute des colonnes)
+        $colNom = 1; $colAdresse = 2; $colNumero = 3
+        for ($h = 1; $h -le $lastCol; $h++) {
+            $header = $worksheet.Cells.Item(1, $h).Text.Trim().ToLower()
+            if ($header -match 'nom')     { $colNom     = $h }
+            if ($header -match 'adress')  { $colAdresse = $h }
+            if ($header -match 'num')     { $colNumero  = $h }
+        }
+
         for ($i = 2; $i -le $lastRow; $i++) {
-            $nom     = $worksheet.Cells.Item($i, 1).Text.Trim()
-            $adresse = $worksheet.Cells.Item($i, 2).Text.Trim()
-            $numero  = $worksheet.Cells.Item($i, 3).Text.Trim()
+            $nom     = $worksheet.Cells.Item($i, $colNom).Text.Trim()
+            $adresse = $worksheet.Cells.Item($i, $colAdresse).Text.Trim()
+            $numero  = $worksheet.Cells.Item($i, $colNumero).Text.Trim()
 
             if ($nom -and $nom -notlike "*Liste*" -and $nom -notlike "*liste*" -and $numero) {
                 $isEP = $numero -in @('21','23','24','25','26','27','50')
