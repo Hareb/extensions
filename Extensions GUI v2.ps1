@@ -305,6 +305,33 @@ function Get-AllPhoneDirectory {
                 }
             }
 
+            # Extraire le nom du manager depuis le DN (ex: "CN=John Doe,OU=..." -> "John Doe")
+            $managerName = if ($user.Manager) {
+                ($user.Manager -split ',')[0] -replace '^CN=', ''
+            } else { "" }
+
+            # Fallback manager: si le domaine email n'a pas pu distinguer 008/025,
+            # utiliser le manager pour desambiguer (Yannick Blanchet = toujours EP 025)
+            if ($script:succursalesData -and (-not $emailClean -or (
+                $emailClean -notlike "*@espaceplomberium.com" -and
+                $emailClean -notlike "*@deschenes.ca" -and
+                $emailClean -notlike "*@groupedeschenes.ca"
+            ))) {
+                if ($succMatch -and $succMatch.Type -eq "Succursale" -and $managerName -eq "Yannick Blanchet") {
+                    $epList = @($script:succursalesData | Where-Object { $_.Type -eq "Espace Plomberium" })
+                    $epMatch = Match-AddressToSuccursale `
+                        -UserAddress    $address `
+                        -UserCity       ($city -as [string]) `
+                        -UserPostalCode ($postalCode -as [string]) `
+                        -Succursales    $epList
+                    if ($epMatch) { $succMatch = $epMatch }
+                    elseif ($epList.Count -gt 0) {
+                        $ep25 = $epList | Where-Object { $_.Numero -eq '25' }
+                        if ($ep25) { $succMatch = $ep25 }
+                    }
+                }
+            }
+
             $branchLabel  = "Non classe"
             $branchNumero = ""
             $branchType   = ""
@@ -315,11 +342,6 @@ function Get-AllPhoneDirectory {
             } elseif ($city) {
                 $branchLabel = $city
             }
-
-            # Extraire le nom du manager depuis le DN (ex: "CN=John Doe,OU=..." -> "John Doe")
-            $managerName = if ($user.Manager) {
-                ($user.Manager -split ',')[0] -replace '^CN=', ''
-            } else { "" }
 
             $allUsers += [PSCustomObject]@{
                 Succursale        = $branchLabel
