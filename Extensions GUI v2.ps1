@@ -848,27 +848,14 @@ $btnLoadAD.Add_Click({
     $progressBar.Visible = $true
     $progressBar.Value = 0
 
-    # Charger les succursales si pas encore fait
-    if (-not $script:succursalesData) {
-        $script:succursalesData = Load-SuccursalesData -FilePath $SuccursalesFile
-    }
+    # Toujours recharger les succursales pour avoir la version la plus recente
+    $script:succursalesData = Load-SuccursalesData -FilePath $SuccursalesFile
 
-    # Vérifier si le cache est valide
-    $useCache = $false
-    if ($script:adDataCache -and $script:adDataCacheTime) {
-        $cacheAge = (Get-Date) - $script:adDataCacheTime
-        if ($cacheAge.TotalMinutes -lt $script:cacheValidityMinutes) {
-            $useCache = $true
-            $script:adData = $script:adDataCache
-            $progressBar.Value = 100
-        }
-    }
-
-    # Charger depuis AD si pas de cache valide
-    if (-not $useCache) {
-        $progressBar.Value = 10
-        $script:adData = Get-AllPhoneDirectory -OUSearchBase $OUPath
-        $progressBar.Value = 80
+    # Charger depuis AD (pas de cache - evite les classifications obsoletes)
+    $progressBar.Value = 10
+    $script:adData = Get-AllPhoneDirectory -OUSearchBase $OUPath
+    $progressBar.Value = 80
+    if ($true) {
 
         # Mettre à jour le cache
         if ($script:adData) {
@@ -886,8 +873,7 @@ $btnLoadAD.Add_Click({
                 $user.Ville, $user.Email, $user.SamAccountName
             )
         }
-        $cacheStatus = if ($useCache) { " (depuis cache)" } else { "" }
-        $lblADCount.Text = "Total: $($script:adData.Count) utilisateurs$cacheStatus"
+        $lblADCount.Text = "Total: $($script:adData.Count) utilisateurs"
         $lblADCount.ForeColor = $colorSuccess
         $btnExportAD.Enabled = $true
 
