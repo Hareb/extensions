@@ -150,6 +150,9 @@ function Get-AddressKeywords {
     foreach ($word in ($normalized -split '\s+')) {
         $word = $word.Trim()
         if ($word.Length -ge 3 -and $word -notin $stopWords) {
+            # Exclure les segments de code postal canadien (ex: "j7k", "3b5", "j5l", "1g2")
+            # Format: lettre-chiffre-lettre  OU  chiffre-lettre-chiffre
+            if ($word -match '^[a-z]\d[a-z]$' -or $word -match '^\d[a-z]\d$') { continue }
             $keywords += $word
         }
     }
