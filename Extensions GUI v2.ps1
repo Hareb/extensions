@@ -161,10 +161,26 @@ function Match-AddressToSuccursale {
         [string]$UserAddress,
         [string]$UserCity,
         [string]$UserPostalCode,
-        $Succursales
+        $Succursales,
+        [string]$UserEmail = ""
     )
 
     if (-not $Succursales) { return $null }
+
+    # ------------------------------------------------------------------
+    # Pré-filtrage par domaine courriel (priorité maximale)
+    # @espaceplomberium.com  → uniquement les Espaces Plombérium
+    # @deschenes.ca / @groupedeschenes.ca → uniquement les Succursales
+    # ------------------------------------------------------------------
+    $candidates = $Succursales
+    if ($UserEmail -match '@espaceplomberium\.com$') {
+        $candidates = $Succursales | Where-Object { $_.Type -eq "Espace Plomberium" }
+    } elseif ($UserEmail -match '@(deschenes|groupedeschenes)\.ca$') {
+        $candidates = $Succursales | Where-Object { $_.Type -eq "Succursale" }
+    }
+
+    # Fallback si le filtre laisse zéro candidats (données manquantes)
+    if (-not $candidates) { $candidates = $Succursales }
 
     $userText     = "$UserAddress $UserCity $UserPostalCode"
     $userKeywords = Get-AddressKeywords $userText
@@ -177,7 +193,7 @@ function Match-AddressToSuccursale {
     $bestMatch = $null
     $bestScore = 0
 
-    foreach ($succ in $Succursales) {
+    foreach ($succ in $candidates) {
         $score = 0
 
         # 1. Correspondance de mots-clés d'adresse
@@ -192,7 +208,7 @@ function Match-AddressToSuccursale {
             }
         }
 
-        # 2. Correspondance code postal (très fiable)
+        # 2. Correspondance code postal (fiable, mais secondaire au filtre courriel)
         if ($postalPrefix -and $succ.Adresse -match [regex]::Escape($postalPrefix)) {
             $score += 30
         }
@@ -248,11 +264,13 @@ function Get-AllPhoneDirectory {
             $postalCode = $user.PostalCode
 
             # Classification intelligente par succursale
+            # Le courriel est passé pour distinguer @espaceplomberium.com vs @deschenes.ca
             $succMatch = Match-AddressToSuccursale `
                 -UserAddress    $address `
                 -UserCity       ($city -as [string]) `
                 -UserPostalCode ($postalCode -as [string]) `
-                -Succursales    $script:succursalesData
+                -Succursales    $script:succursalesData `
+                -UserEmail      ($user.EmailAddress -as [string])
 
             $branchLabel  = "Non classe"
             $branchNumero = ""
