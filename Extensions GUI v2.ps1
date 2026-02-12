@@ -268,12 +268,40 @@ function Get-AllPhoneDirectory {
 
             # Classification intelligente par succursale
             # Le courriel est passé pour distinguer @espaceplomberium.com vs @deschenes.ca
+            $emailClean = if ($user.EmailAddress) { $user.EmailAddress.Trim().ToLower() } else { "" }
             $succMatch = Match-AddressToSuccursale `
                 -UserAddress    $address `
                 -UserCity       ($city -as [string]) `
                 -UserPostalCode ($postalCode -as [string]) `
                 -Succursales    $script:succursalesData `
-                -UserEmail      ($user.EmailAddress -as [string])
+                -UserEmail      $emailClean
+
+            # Filet de sécurité : si le domaine courriel contredit le type assigné, forcer la correction
+            if ($script:succursalesData -and $emailClean) {
+                $isEPEmail  = $emailClean -match '@espaceplomberium\.com$'
+                $isSucEmail = $emailClean -match '@(deschenes|groupedeschenes)\.ca$'
+
+                if ($isEPEmail -and $succMatch -and $succMatch.Type -ne "Espace Plomberium") {
+                    # Email EP mais classé en Succursale normale -> forcer recherche EP
+                    $fix = Match-AddressToSuccursale `
+                        -UserAddress    $address `
+                        -UserCity       ($city -as [string]) `
+                        -UserPostalCode ($postalCode -as [string]) `
+                        -Succursales    ($script:succursalesData | Where-Object { $_.Type -eq "Espace Plomberium" }) `
+                        -UserEmail      ""
+                    if ($fix) { $succMatch = $fix }
+                }
+                elseif ($isSucEmail -and $succMatch -and $succMatch.Type -eq "Espace Plomberium") {
+                    # Email @deschenes.ca mais classé en EP -> forcer recherche Succursale
+                    $fix = Match-AddressToSuccursale `
+                        -UserAddress    $address `
+                        -UserCity       ($city -as [string]) `
+                        -UserPostalCode ($postalCode -as [string]) `
+                        -Succursales    ($script:succursalesData | Where-Object { $_.Type -eq "Succursale" }) `
+                        -UserEmail      ""
+                    if ($fix) { $succMatch = $fix }
+                }
+            }
 
             $branchLabel  = "Non classe"
             $branchNumero = ""
