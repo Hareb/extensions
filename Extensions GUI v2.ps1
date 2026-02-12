@@ -274,6 +274,37 @@ function Get-AllPhoneDirectory {
                 -UserPostalCode ($postalCode -as [string]) `
                 -Succursales    $candidateList
 
+            # ----------------------------------------------------------------
+            # CORRECTION ABSOLUE : le domaine courriel a priorité sur tout.
+            # @espaceplomberium.com -> JAMAIS dans une Succursale normale.
+            # @deschenes.ca        -> JAMAIS dans un Espace Plomberium.
+            # ----------------------------------------------------------------
+            if ($script:succursalesData -and $emailClean) {
+                $wrongType = $false
+                $forcedType = ""
+                if ($emailClean -like "*@espaceplomberium.com") {
+                    $forcedType = "Espace Plomberium"
+                    $wrongType  = (-not $succMatch -or $succMatch.Type -ne "Espace Plomberium")
+                }
+                elseif ($emailClean -like "*@deschenes.ca" -or $emailClean -like "*@groupedeschenes.ca") {
+                    $forcedType = "Succursale"
+                    $wrongType  = (-not $succMatch -or $succMatch.Type -ne "Succursale")
+                }
+
+                if ($wrongType -and $forcedType) {
+                    $forcedList = @($script:succursalesData | Where-Object { $_.Type -eq $forcedType })
+                    if ($forcedList.Count -gt 0) {
+                        $forced = Match-AddressToSuccursale `
+                            -UserAddress    $address `
+                            -UserCity       ($city -as [string]) `
+                            -UserPostalCode ($postalCode -as [string]) `
+                            -Succursales    $forcedList
+                        # Si aucun match d'adresse dans la bonne categorie, prendre le premier de la liste forcee
+                        $succMatch = if ($forced) { $forced } else { $forcedList[0] }
+                    }
+                }
+            }
+
             $branchLabel  = "Non classe"
             $branchNumero = ""
             $branchType   = ""
