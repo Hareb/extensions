@@ -785,7 +785,7 @@ function Compare-Data {
 # ============================================
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = 'Comparateur de Repertoire Telephonique'
+$form.Text = 'Comparateur de Repertoire - BUILD-20260212'
 $form.Size = New-Object System.Drawing.Size(1400, 850)
 $form.StartPosition = 'CenterScreen'
 $form.BackColor = $colorSecondary
