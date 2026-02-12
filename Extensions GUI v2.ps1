@@ -95,7 +95,7 @@ function Get-AllPhoneDirectory {
             } elseif ($city) {
                 $branch = $city
             }
-            
+
             $managerName = ""
             if ($user.Manager) {
                 try {
@@ -104,6 +104,21 @@ function Get-AllPhoneDirectory {
                         $managerName = $manager.DisplayName
                     }
                 } catch {}
+            }
+
+            # Disambiguation: St-Jerome 008 vs Espace Plomberium 025
+            # Les deux succursales partagent la meme adresse physique (1075 Grand-Heron)
+            # On distingue par le domaine email, avec le manager comme fallback
+            $emailAddress = $user.EmailAddress
+            if ($city -and $city -match "(?i)j.r.me") {
+                if ($emailAddress -and $emailAddress -like "*@espaceplomberium.com") {
+                    $branch = "Espace Plomberium St-Jerome"
+                } elseif ($emailAddress -and $emailAddress -like "*@deschenes.ca") {
+                    $branch = "St-Jerome"
+                } elseif ($managerName -eq "Yannick Blanchet") {
+                    # Fallback: le manager de la 025 est toujours Yannick Blanchet
+                    $branch = "Espace Plomberium St-Jerome"
+                }
             }
             
             $allUsers += [PSCustomObject]@{
