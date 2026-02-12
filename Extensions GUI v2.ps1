@@ -164,31 +164,15 @@ function Match-AddressToSuccursale {
         [string]$UserAddress,
         [string]$UserCity,
         [string]$UserPostalCode,
-        $Succursales,
-        [string]$UserEmail = ""
+        $Succursales
     )
 
-    if (-not $Succursales) { return $null }
-
-    # ------------------------------------------------------------------
-    # Pré-filtrage par domaine courriel (priorité maximale)
-    # @espaceplomberium.com  → uniquement les Espaces Plombérium
-    # @deschenes.ca / @groupedeschenes.ca → uniquement les Succursales
-    # ------------------------------------------------------------------
-    $candidates = $Succursales
-    if ($UserEmail -match '@espaceplomberium\.com$') {
-        $candidates = $Succursales | Where-Object { $_.Type -eq "Espace Plomberium" }
-    } elseif ($UserEmail -match '@(deschenes|groupedeschenes)\.ca$') {
-        $candidates = $Succursales | Where-Object { $_.Type -eq "Succursale" }
-    }
-
-    # Fallback si le filtre laisse zéro candidats (données manquantes)
-    if (-not $candidates) { $candidates = $Succursales }
+    if (-not $Succursales -or @($Succursales).Count -eq 0) { return $null }
 
     $userText     = "$UserAddress $UserCity $UserPostalCode"
     $userKeywords = Get-AddressKeywords $userText
 
-    # Postal prefix (ex: "H9H")
+    # Postal prefix (ex: "J5L")
     $postalPrefix = if ($UserPostalCode -and $UserPostalCode.Length -ge 3) {
         $UserPostalCode.Substring(0,3).ToUpper()
     } else { "" }
@@ -196,7 +180,7 @@ function Match-AddressToSuccursale {
     $bestMatch = $null
     $bestScore = 0
 
-    foreach ($succ in $candidates) {
+    foreach ($succ in $Succursales) {
         $score = 0
 
         # 1. Correspondance de mots-clés d'adresse
@@ -211,7 +195,7 @@ function Match-AddressToSuccursale {
             }
         }
 
-        # 2. Correspondance code postal (fiable, mais secondaire au filtre courriel)
+        # 2. Correspondance code postal
         if ($postalPrefix -and $succ.Adresse -match [regex]::Escape($postalPrefix)) {
             $score += 30
         }
@@ -229,7 +213,6 @@ function Match-AddressToSuccursale {
         }
     }
 
-    # Seuil minimum pour accepter un match
     if ($bestScore -ge 15) { return $bestMatch }
     return $null
 }
@@ -266,42 +249,30 @@ function Get-AllPhoneDirectory {
             if (-not $city) { $city = $user.Office }
             $postalCode = $user.PostalCode
 
-            # Classification intelligente par succursale
-            # Le courriel est passé pour distinguer @espaceplomberium.com vs @deschenes.ca
-            $emailClean = if ($user.EmailAddress) { $user.EmailAddress.Trim().ToLower() } else { "" }
+            # Classification par succursale
+            # Le domaine courriel determine QUELLE liste passer a Match-AddressToSuccursale
+            # C'est la seule source de verite pour distinguer EP vs Succursale normale
+            $emailClean      = if ($user.EmailAddress) { $user.EmailAddress.Trim().ToLower() } else { "" }
+            $candidateList   = $script:succursalesData
+
+            if ($script:succursalesData) {
+                if ($emailClean -like "*@espaceplomberium.com") {
+                    # Employe Espace Plomberium: chercher uniquement parmi les EP
+                    $epOnly = @($script:succursalesData | Where-Object { $_.Type -eq "Espace Plomberium" })
+                    if ($epOnly.Count -gt 0) { $candidateList = $epOnly }
+                }
+                elseif ($emailClean -like "*@deschenes.ca" -or $emailClean -like "*@groupedeschenes.ca") {
+                    # Employe Deschenes: chercher uniquement parmi les Succursales normales
+                    $sucOnly = @($script:succursalesData | Where-Object { $_.Type -eq "Succursale" })
+                    if ($sucOnly.Count -gt 0) { $candidateList = $sucOnly }
+                }
+            }
+
             $succMatch = Match-AddressToSuccursale `
                 -UserAddress    $address `
                 -UserCity       ($city -as [string]) `
                 -UserPostalCode ($postalCode -as [string]) `
-                -Succursales    $script:succursalesData `
-                -UserEmail      $emailClean
-
-            # Filet de sécurité : si le domaine courriel contredit le type assigné, forcer la correction
-            if ($script:succursalesData -and $emailClean) {
-                $isEPEmail  = $emailClean -match '@espaceplomberium\.com$'
-                $isSucEmail = $emailClean -match '@(deschenes|groupedeschenes)\.ca$'
-
-                if ($isEPEmail -and $succMatch -and $succMatch.Type -ne "Espace Plomberium") {
-                    # Email EP mais classé en Succursale normale -> forcer recherche EP
-                    $fix = Match-AddressToSuccursale `
-                        -UserAddress    $address `
-                        -UserCity       ($city -as [string]) `
-                        -UserPostalCode ($postalCode -as [string]) `
-                        -Succursales    ($script:succursalesData | Where-Object { $_.Type -eq "Espace Plomberium" }) `
-                        -UserEmail      ""
-                    if ($fix) { $succMatch = $fix }
-                }
-                elseif ($isSucEmail -and $succMatch -and $succMatch.Type -eq "Espace Plomberium") {
-                    # Email @deschenes.ca mais classé en EP -> forcer recherche Succursale
-                    $fix = Match-AddressToSuccursale `
-                        -UserAddress    $address `
-                        -UserCity       ($city -as [string]) `
-                        -UserPostalCode ($postalCode -as [string]) `
-                        -Succursales    ($script:succursalesData | Where-Object { $_.Type -eq "Succursale" }) `
-                        -UserEmail      ""
-                    if ($fix) { $succMatch = $fix }
-                }
-            }
+                -Succursales    $candidateList
 
             $branchLabel  = "Non classe"
             $branchNumero = ""
